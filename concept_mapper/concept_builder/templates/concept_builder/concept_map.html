@@ -91,17 +91,25 @@
     <!-- pass positions as JSON -->
     {{ positions|json_script:"initial-positions" }}
 
-    <!-- bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    
+    <!-- speech recognition script -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/compromise@latest/builds/compromise.js"></script>
     <!-- vis.js concept visualization map script -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            if (typeof nlp === 'undefined') {
+        console.error('Compromise library not loaded - nlp is undefined');
+    } else {
+        console.log('Compromise loaded successfully');
+    }
             console.log('DOM loaded');
             // load in positions from the JSON script tag
             const positionsScript = document.getElementById('initial-positions');
             const positions = positionsScript ? JSON.parse(positionsScript.textContent) : {};
             console.log('Positions:', positions);
+
+            const centralNodeId = {{ central_node.id|default:'null' }};
 
             // create nodes and apply positions
             var nodes = new vis.DataSet([
@@ -128,6 +136,7 @@
                 }
             });
 
+            // instantiate edges
             var edges = new vis.DataSet([
                 {% for rel in relations %}
                     {
@@ -141,6 +150,7 @@
 
             console.log('Edges created:', edges.length);
 
+            // create the network
             var container = document.getElementById('network');
             if (!container) {
                 console.error('Network container not found');
@@ -188,6 +198,108 @@
                 return;
             }
 
+            let currentInput = null;
+
+            // Speech Recognition setup
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.error('Speech Recognition not supported');
+            } else {
+                const recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+                console.log('Speech recognition initialized');
+
+                recognition.onresult = function(event) {
+                    const transcript = event.results[event.results.length - 1][0].transcript.trim();
+                    console.log('Speech detected:', transcript);
+                    const doc = nlp(transcript);  // Use compromise
+                    console.log("got transcript: ", doc.out('text'));
+                    let topics = doc.nouns().out('array');  // Try nouns first
+                    if (topics.length === 0) {
+                        console.log('No nouns found, falling back to terms');
+                        topics = doc.terms().out('array');  // Fallback to all terms
+                    }
+                    console.log('Extracted topics:', topics);
+                    topics.forEach(keyword => {
+                        console.log('Keyword found:', keyword);
+                        addKeywordToMap(keyword, network);
+                    });
+                };
+
+                recognition.onerror = function(event) {
+                    console.error('Speech recognition error:', event.error);
+                    console.log('Error details:', event);
+                    fetch('https://www.google.com', { mode: 'no-cors' })
+                    .then(() => {
+                        console.log('Google fetch succeeded');
+                        alert('Speech service unreachable despite internet access. Try incognito mode, another browser, or check firewall/VPN.');
+                    })
+                    .catch(err => {
+                        console.error('Google fetch failed:', err);
+                        alert('No internet connection detected.');
+                    });
+                    //alert('Network error: Speech service unreachable. Check firewall, VPN, or try another browser.');
+                    listenButton.textContent = 'Start Listening';
+                    isListening = false;
+                };
+
+                const listenButton = document.createElement('button');
+                listenButton.textContent = 'Start Listening';
+                listenButton.style.position = 'absolute';
+                listenButton.style.top = '10px';
+                listenButton.style.right = '10px';
+                document.body.appendChild(listenButton);
+
+                let isListening = false;
+                listenButton.addEventListener('click', function() {
+                    if (isListening) {
+                        recognition.stop();
+                        listenButton.textContent = 'Start Listening';
+                    } else {
+                        recognition.start();
+                        listenButton.textContent = 'Stop Listening';
+                    }
+                    isListening = !isListening;
+                });
+            }
+
+            // func to add keyword to map
+            function addKeywordToMap(keyword, network) {
+                const formData = new FormData(addConceptForm);
+                formData.append('action', 'add_concept');
+                formData.append('name', keyword);
+                // Position slightly offset from center or last node
+                formData.append('x_pos', (nodes.length % 5) * 100);
+                formData.append('y_pos', Math.floor(nodes.length / 5) * 100);
+                formData.append('csrfmiddlewaretoken', csrfToken);
+
+                fetch('', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {'X-Requested-With': 'XMLHttpRequest'}
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        const nodeColor = data.is_central ? '#28a745' : '#6c757d';
+                        nodes.add({
+                            id: parseInt(data.node_id),
+                            label: keyword,
+                            shape: 'box',
+                            color: nodeColor,
+                            x: parseFloat(data.x_pos),
+                            y: parseFloat(data.y_pos)
+                        });
+                        console.log('Added keyword node:', keyword);
+                    } else {
+                        console.error('Failed to add keyword:', data.message);
+                    }
+                })
+                .catch(error => console.error('Error adding keyword:', error));
+            }
+
             // create a new node when user clicks on a blank spot
             network.on('click', function(params) {
                 if (params.nodes.length === 0 && params.edges.length === 0) {
@@ -204,6 +316,7 @@
                     input.placeholder = 'Node name';
                     document.body.appendChild(input);
                     input.focus();
+                    currentInput = input;
 
                     input.addEventListener('keydown', function(event) {
                         if (event.key === 'Enter' && input.value) {
@@ -273,60 +386,48 @@
                     console.log('Attempting to delete node:', nodeId);
                     
                     // Don't allow deletion of central node
-                    const centralNodeId = null;
-                    if (central_node){
-                        centralNodeId = central_node.id;
-                    }
                     if (nodeId == centralNodeId) {
                         console.log('Cannot delete central node');
-                        alert('The central node cannot be deleted.');
                         return;
                     }
                     
-                    if (confirm('Are you sure you want to delete this node?')) {
-                        console.log('Deletion confirmed for node:', nodeId);
-                        
-                        const formData = new FormData();
-                        formData.append('action', 'delete_concept');  // Match the view's action name
-                        formData.append('concept_id', nodeId);       // Match the parameter name
-                        formData.append('csrfmiddlewaretoken', csrfToken);
-                        
-                        console.log('Sending delete request for node:', nodeId);
-                        
-                        fetch('', {
-                            method: 'POST',
-                            body: formData,
-                            headers: {
-                                'X-Requested-With': 'XMLHttpRequest'
-                            }
-                        })
-                        .then(response => {
-                            console.log('Delete node response status:', response.status);
-                            return response.json();
-                        })
-                        .then(data => {
-                            console.log('Delete node response data:', data);
-                            if (data.status === 'success') {
-                                // Remove the node from the visualization
-                                nodes.remove(nodeId);
-                                console.log('Node successfully deleted from visualization:', nodeId);
-                                
-                                // Also remove any connected edges
-                                const connectedEdges = network.getConnectedEdges(nodeId);
-                                edges.remove(connectedEdges);
-                                console.log('Removed connected edges:', connectedEdges);
-                            } else {
-                                console.error('Failed to delete node:', data.message);
-                                alert('Failed to delete node: ' + data.message);
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Error in delete node request:', error);
-                            alert('Error deleting node: ' + error);
-                        });
-                    } else {
-                        console.log('Node deletion cancelled by user');
-                    }
+                    const formData = new FormData();
+                    formData.append('action', 'delete_concept');  // Match the view's action name
+                    formData.append('concept_id', nodeId);       // Match the parameter name
+                    formData.append('csrfmiddlewaretoken', csrfToken);
+                    
+                    console.log('Sending delete request for node:', nodeId);
+                    
+                    fetch('', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(response => {
+                        console.log('Delete node response status:', response.status);
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Delete node response data:', data);
+                        if (data.status === 'success') {
+                            // Remove the node from the visualization
+                            nodes.remove(nodeId);
+                            console.log('Node successfully deleted from visualization:', nodeId);
+                            
+                            // Also remove any connected edges
+                            const connectedEdges = network.getConnectedEdges(nodeId);
+                            edges.remove(connectedEdges);
+                            console.log('Removed connected edges:', connectedEdges);
+                        } else {
+                            console.error('Failed to delete node:', data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error in delete node request:', error);
+                        alert('Error deleting node: ' + error);
+                    });
                 }
             });
 
@@ -367,69 +468,38 @@
                 }
             });
 
+            // select a node to create a relation
             network.on('selectNode', function(params) {
                 console.log('selectNode event triggered:', params);
                 if (params.nodes.length > 0) {
                     let nodeId = params.nodes[0];
                     let centralNodeId = {{ central_node.id|default:'null' }};
                     console.log('Selected node:', nodeId, 'Central node:', centralNodeId, 'SelectedNode:', selectedNode);
-                    // const addRelationForm = document.getElementById('add-relation-form');
-                    // const formData = new FormData(addRelationForm);  // Previously fixed, likely not line 370
-                    if (selectedNode === null) {
-                        // First node selected
-                        if (nodeId !== centralNodeId) {
-                            selectedNode = nodeId;
-                            nodes.update({id: nodeId, color: '#ffeb3b'});
-                            console.log('First node selected:', selectedNode);
-                        } else {
-                            console.log('Central node cannot be the source, ignored');
-                        }
+                    if (!relationForm) {
+                        console.error('Add relation form not found');
+                        return;
+                    }
+                    const formData = new FormData(relationForm);
+                    if (selectedNode && selectedNode !== nodeId) {
+                        formData.set('source', selectedNode);
+                        formData.set('target', nodeId);
+                        fetch('', {
+                            method: 'POST',
+                            body: formData,
+                            headers: {'X-Requested-With': 'XMLHttpRequest'}
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                edges.add({from: parseInt(data.source_id), to: parseInt(data.target_id), arrows: 'to', color: '#007bff'});
+                                selectedNode = null;
+                            } else {
+                                console.error('Failed to add relation:', data.message);
+                            }
+                        })
+                        .catch(error => console.error('Error adding relation:', error));
                     } else {
-                        // Second node selected
-                        if (selectedNode === nodeId) {
-                            // Clicking the same node deselects it
-                            nodes.update({id: nodeId, color: '#6c757d'});
-                            selectedNode = null;
-                            console.log('Deselected same node');
-                        } else {
-                            // Create relation
-                            console.log('Attempting to create relation:', selectedNode, '->', nodeId);
-                            const formData = new FormData(relationForm);
-                            formData.append('source', selectedNode);
-                            formData.append('target', nodeId);
-                            formData.append('csrfmiddlewaretoken', csrfToken);
-
-                            fetch('', {
-                                method: 'POST',
-                                body: formData,
-                                headers: {
-                                    'X-Requested-With': 'XMLHttpRequest'
-                                }
-                            })
-                            .then(response => {
-                                console.log('Relation creation response status:', response.status);
-                                return response.json();
-                            })
-                            .then(data => {
-                                console.log('AJAX response:', data);
-                                if (data.status === 'success') {
-                                    edges.add({
-                                        from: parseInt(data.source_id, 10),
-                                        to: parseInt(data.target_id, 10),
-                                        arrows: 'to',
-                                        color: '#007bff'
-                                    });
-                                    console.log('Relation added:', data.source_id, '->', data.target_id);
-                                } else {
-                                    console.error('Failed to add relation:', data.message);
-                                }
-                            })
-                            .catch(error => console.error('AJAX error:', error));
-
-                            // Reset selection
-                            nodes.update({id: selectedNode, color: '#6c757d'});
-                            selectedNode = null;
-                        }
+                        selectedNode = nodeId;
                     }
                 }
             });
@@ -445,7 +515,29 @@
                 }
             });
 
-            // delete central node + prompt user to make a new one
+            // deselect node when clicking outside the network
+            document.addEventListener('click', function(event) {
+                const networkContainer = document.getElementById('network');
+                if (!networkContainer.contains(event.target)){
+                    // clear selection of curr node when clicking outside box
+                    if (selectedNode !== null) {
+                        console.log('Clicked outside network, clearing selection');
+                        nodes.update({id: selectedNode, borderWidth: 1});
+                        selectedNode = null;
+                        network.unselectAll();
+                        console.log('Selection cleared');
+                    }
+
+                    // clear curr text box when clicking outside box
+                    if (currentInput) {
+                        console.log('Clicked outside network, removing text box');
+                        document.body.removeChild(currentInput);
+                        currentInput = null;
+                    }
+                }
+            });
+
+            // delete central node (deletes all nodes and edges)
             const deleteCentralNodeButton = document.getElementById('delete-central-node');
             if (deleteCentralNodeButton) {
                 console.log('Delete central node button found');
@@ -453,48 +545,42 @@
                 deleteCentralNodeButton.addEventListener('click', function() {
                     console.log('Delete central node button clicked');
                     
-                    if (confirm('Are you sure you want to delete the central node? This will reset the concept map.')) {
-                        console.log('Deletion confirmed');
-                        
-                        const formData = new FormData(document.getElementById('delete-central-node-form'));
-                        
-                        fetch('', {
-                            method: 'POST',
-                            body: formData,
-                            headers: {
-                                'X-Requested-With': 'XMLHttpRequest'
+                    const formData = new FormData(document.getElementById('delete-central-node-form'));
+                    
+                    fetch('', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(response => {
+                        console.log('Server response status:', response.status);
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Server response data:', data);
+                        if (data.status === 'success') {
+                            console.log('Central node deleted successfully');
+                            
+                            // Clear the existing visualization immediately
+                            nodes.clear();
+                            edges.clear();
+                            
+                            // Clear the central node badge in the instructions
+                            const centralNodeBadge = document.querySelector('.badge.bg-success');
+                            if (centralNodeBadge) {
+                                centralNodeBadge.textContent = 'None';
                             }
-                        })
-                        .then(response => {
-                            console.log('Server response status:', response.status);
-                            return response.json();
-                        })
-                        .then(data => {
-                            console.log('Server response data:', data);
-                            if (data.status === 'success') {
-                                console.log('Central node deleted successfully');
-                                
-                                // Clear the existing visualization immediately
-                                nodes.clear();
-                                edges.clear();
-                                
-                                // Clear the central node badge in the instructions
-                                const centralNodeBadge = document.querySelector('.badge.bg-success');
-                                if (centralNodeBadge) {
-                                    centralNodeBadge.textContent = 'None';
-                                }
-                            } else {
-                                console.error('Failed to delete central node:', data.message);
-                                alert('Failed to delete central node: ' + data.message);
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Error:', error);
-                            alert('An error occurred while deleting the central node.');
-                        });
-                    } else {
-                        console.log('Deletion cancelled');
-                    }
+                        } else {
+                            console.error('Failed to delete central node:', data.message);
+                            alert('Failed to delete central node: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('An error occurred while deleting the central node.');
+                    });
                 });
             } else {
                 console.log('No node to delete');
