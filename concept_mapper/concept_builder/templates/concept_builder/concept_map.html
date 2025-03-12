@@ -215,17 +215,59 @@
                     const transcript = event.results[event.results.length - 1][0].transcript.trim();
                     console.log('Speech detected:', transcript);
                     const doc = nlp(transcript);  // Use compromise
-                    console.log("got transcript: ", doc.out('text'));
-                    let topics = doc.nouns().out('array');  // Try nouns first
-                    if (topics.length === 0) {
-                        console.log('No nouns found, falling back to terms');
-                        topics = doc.terms().out('array');  // Fallback to all terms
+
+                    // Check for "add concept"
+                    if (doc.has('add concept')) {
+                        const conceptMatch = doc.match('add concept .+').out('text'); // Get full phrase
+                        if (conceptMatch) {
+                            const concept = conceptMatch.replace('add concept', '').trim(); // Extract concept name
+                            console.log('Adding concept:', concept);
+                            addKeywordToMap(concept, network); // Add node
+                        }
                     }
-                    console.log('Extracted topics:', topics);
-                    topics.forEach(keyword => {
-                        console.log('Keyword found:', keyword);
-                        addKeywordToMap(keyword, network);
-                    });
+                    // Check for "add relation"
+                    else if (doc.has('add relation between')) {
+                        const relationDoc = doc.match('add relation between .+');
+                        if (relationDoc.found) {
+                            const relationText = relationDoc.out('text').replace('add relation between', '').trim();
+                            console.log('Relation text:', relationText);
+
+                            // Split at "and" to separate the two node labels
+                            const parts = relationText.split(' and ');
+                            if (parts.length === 2) {
+                                const node1Text = parts[0].trim();
+                                const node2Text = parts[1].trim();
+
+                                // Parse each part to extract the core noun or full phrase
+                                const node1Doc = nlp(node1Text);
+                                const node2Doc = nlp(node2Text);
+                                const node1Nouns = node1Doc.nouns().out('array');
+                                const node2Nouns = node2Doc.nouns().out('array');
+
+                                // Use the full phrase if no nouns, or the first noun
+                                const node1 = node1Nouns.length > 0 ? node1Nouns[0] : node1Text;
+                                const node2 = node2Nouns.length > 0 ? node2Nouns[0] : node2Text;
+
+                                console.log('Node 1 text:', node1Text);
+                                console.log('Node 2 text:', node2Text);
+                                console.log('Extracted nodes:', { node1, node2 });
+
+                                if (node1 && node2) {
+                                    console.log('Creating relation between:', node1, 'and', node2);
+                                    addRelation(node1, node2, network);
+                                } else {
+                                    console.log('Not enough valid nodes');
+                                }
+                            } else {
+                                console.log('Invalid relation format: missing "and" or incorrect structure');
+                            }
+                        } else {
+                            console.log('Invalid relation format: no content after "create relation between"');
+                        }
+                    // nothing useful to add
+                    } else {
+                        console.log('No actionable command detected');
+                    }
                 };
 
                 recognition.onerror = function(event) {
@@ -298,6 +340,46 @@
                     }
                 })
                 .catch(error => console.error('Error adding keyword:', error));
+            }
+
+            function addRelation(node1Label, node2Label, network) {
+                const cleanLabel = (label) => label.replace(/^(the|a|an)\s+/i, '').trim();
+                const cleanNode1Label = cleanLabel(node1Label);
+                const cleanNode2Label = cleanLabel(node2Label);
+
+                const node1 = nodes.get().find(n => n.label.toLowerCase() === cleanNode1Label.toLowerCase());
+                const node2 = nodes.get().find(n => n.label.toLowerCase() === cleanNode2Label.toLowerCase());
+                
+                if (node1 && node2) {
+                    const relationForm = document.getElementById('add-relation-form');
+                    if (!relationForm) {
+                        console.error('Add relation form not found');
+                        return;
+                    }
+
+                    const formData = new FormData(relationForm);
+                    formData.set('source', node1.id);  // Use node IDs, not labels
+                    formData.set('target', node2.id);
+
+                    fetch('', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {'X-Requested-With': 'XMLHttpRequest'}
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            edges.add({from: parseInt(data.source_id), to: parseInt(data.target_id), arrows: 'to', color: '#007bff'});
+                            console.log('Edge added via speech:', {from: data.source_id, to: data.target_id});
+                            network.fit();
+                        } else {
+                            console.error('Failed to add relation:', data.message);
+                        }
+                    })
+                    .catch(error => console.error('Error adding relation:', error));
+                } else {
+                    console.log('Nodes not found:', { node1: !!node1, node2: !!node2 });
+                }
             }
 
             // create a new node when user clicks on a blank spot
