@@ -44,6 +44,25 @@ body {
 .concept-list li, .relation-list li {
     padding: 5px 0;
 }
+.instruction-panel {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    max-width: 600px;
+    margin: 0 auto;
+}
+.instruction-panel .instructions {
+font-size: 14px;
+}
+
+.instruction-panel i {
+margin-right: 5px;
+color: #0d6efd;
+}
+
+.instruction-panel .list-unstyled li {
+margin-bottom: 8px;
+}
 #network {
     width: 100%;
     height: 400px;

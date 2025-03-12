@@ -6,6 +6,7 @@
     <title>Concept Visualization</title>
 
     <!-- bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     
     <!-- custom CSS -->
@@ -22,42 +23,69 @@
 
         <!-- concept visualization map -->
         <div id="network" class="mb-4"></div>
-        <div class="form-section">
-            <h3>Add a New Concept (Outer Node)</h3>
-            <form method="post" id="add-concept-form">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="add_concept">
-                <div class="input-group mb-3">
-                    <input type="text" name="name" class="form-control" placeholder="e.g., warming oceans" required>
-                    <button type="submit" class="btn btn-primary">Add Concept</button>
-                </div>
-            </form>
-            <p>Central Node: <span class="central-node">{{ central_node.name }}</span> (Cannot be deleted—core of the map)</p>
+
+        <div class="instruction-panel card mt-3 p-3">
+            <h5 class="card-title">Instructions</h5>
+            <div class="instructions">
+                <ul class="list-unstyled">
+                    <li>
+                        <i class="bi bi-plus-circle"></i>
+                        To <strong>add a concept</strong>, click any empty space on the map and type a keyword
+                    </li>
+                    <li>
+                        <i class="bi bi-arrow-right"></i>
+                        To <strong>create a relation</strong>, click a node to select it, then click another node to connect them
+                    </li>
+                    <li>
+                        <i class="bi bi-x-circle"></i>
+                        To <strong>delete a concept</strong>, double-click it
+                    </li>
+                    <li>
+                        <i class="bi bi-arrows-move"></i> 
+                        To <strong>move a concept</strong>, simply drag it to a new location
+                    </li>
+                </ul>
+                <p class="text-muted small">
+                    Central Node: 
+                    {% if central_node %}
+                        <span class="badge bg-success">{{ central_node.name }}</span>
+                        <p>
+                            <button id="delete-central-node" class="btn btn-sm btn-danger ms-2">Delete Central Node</button>
+                        </p>
+                    {% else %}
+                        <span class="badge bg-secondary">None</span>
+                        <p>
+                            <!-- No delete button when there's no central node -->
+                        </p>
+                    {% endif %}
+                </p>
+            </div>
         </div>
-        <div class="form-section">
-            <h3>Add a Relation (Click-to-Connect)</h3>
-            <p>Click a node (not the central node) to set as source, then click another node to create a relation.</p>
-            <form id="add-relation-form" style="display:none;">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="add_relation">
-                <input type="hidden" name="source" id="relation-source">
-                <input type="hidden" name="target" id="relation-target">
-            </form>
-            <form id="update-position-form" style="display:none;">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="update_position">
-                <input type="hidden" name="node_id" id="position-node-id">
-                <input type="hidden" name="x_pos" id="position-x">
-                <input type="hidden" name="y_pos" id="position-y">
-            </form>
-            <form id="add-concept-via-click-form" style="display:none;">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="add_concept">
-                <input type="hidden" name="name" id="concept-name">
-                <input type="hidden" name="x_pos" id="concept-x">
-                <input type="hidden" name="y_pos" id="concept-y">
-            </form>
-        </div>
+
+        <!-- forms -->
+        <form id="delete-central-node-form" style="display:none;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete_central_node">
+            <input type="hidden" name="central_node_id" value="{{ central_node.id }}">
+        </form>
+
+        <form id="add-concept-via-click-form" method="post" style="display: none;">
+            {% csrf_token %}
+        </form>
+        <form id="add-relation-form" method="post" style="display: none;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="add_relation">
+            <input type="hidden" name="source" id="relation-source">
+            <input type="hidden" name="target" id="relation-target">
+        </form>
+        <form id="update-position-form" method="post" style="display: none;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update_position">
+            <input type="hidden" name="node_id" id="position-node-id">
+            <input type="hidden" name="x_pos" id="position-x">
+            <input type="hidden" name="y_pos" id="position-y">
+        </form>
+        <div id="network" style="height: 600px;"></div>
     </div>
 
     <!-- pass positions as JSON -->
@@ -126,7 +154,8 @@
                     nodes: {shape: 'box', font: {size: 14}},
                     edges: {font: {size: 0}, arrows: {to: {enabled: true}}},
                     physics: {enabled: false},
-                    interaction: {zoomView: true, dragView: true, dragNodes: true, zoomSpeed: 0.3}
+                    interaction: {zoomView: true, dragView: true, dragNodes: true, zoomSpeed: 0.3},
+                    //selectable: true
                 };
                 var network = new vis.Network(container, data, options);
                 console.log('Network initialized');
@@ -136,7 +165,7 @@
 
             let selectedNode = null;
 
-            // // track the currently open text box
+            // track the currently open text box
             // let activeTextBox = null;
 
             // // func to remove the active text box
@@ -150,8 +179,8 @@
 
             const relationForm = document.getElementById('add-relation-form');
             const updatePositionForm = document.getElementById('update-position-form');
-            const addConceptForm = document.getElementById('add-concept-via-click-form');
-            const addConceptBottomForm = document.getElementById('add-concept-form');       // this will be removed eventually
+            const addConceptForm = document.getElementById('add-concept-via-click-form');// || document.createElement('form');
+            //const addConceptBottomForm = document.getElementById('add-concept-form');       // this will be removed eventually
             const csrfToken = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value;
 
             if (!csrfToken) {
@@ -180,6 +209,7 @@
                         if (event.key === 'Enter' && input.value) {
                             const name = input.value;
                             const formData = new FormData(addConceptForm);
+                            formData.append('action', 'add_concept');
                             formData.append('name', name);
                             formData.append('x_pos', pointerCanvas.x);
                             formData.append('y_pos', pointerCanvas.y);
@@ -195,14 +225,31 @@
                             .then(response => response.json())
                             .then(data => {
                                 if (data.status === 'success') {
+                                    // Set the color based on whether this is a central node
+                                    const nodeColor = data.is_central ? '#28a745' : '#6c757d';
+                                    
                                     nodes.add({
                                         id: parseInt(data.node_id),
                                         label: name,
                                         shape: 'box',
-                                        color: '#6c757d',
+                                        color: nodeColor,
                                         x: parseFloat(data.x_pos),
                                         y: parseFloat(data.y_pos)
                                     });
+                                    
+                                    // If this is a central node, update the central node badge
+                                    if (data.is_central) {
+                                        const centralNodeBadge = document.querySelector('.badge.bg-success');
+                                        if (centralNodeBadge) {
+                                            centralNodeBadge.textContent = name;
+                                        }
+                                        
+                                        // Update the hidden form with the new central node ID
+                                        const centralNodeIdInput = document.querySelector('input[name="central_node_id"]');
+                                        if (centralNodeIdInput) {
+                                            centralNodeIdInput.value = data.node_id;
+                                        }
+                                    }
                                 } else {
                                     console.error('Failed to add node:', data.message);
                                 }
@@ -217,40 +264,70 @@
                 }
             });
 
-            // submit form via AJAX
-            addConceptBottomForm.addEventListener('submit', function(event) {
-                event.preventDefault();
-                const nameInput = addConceptBottomForm.querySelector('input[name="name"]');
-                if (!nameInput.value.trim()) return;
-
-                const formData = new FormData(addConceptBottomForm);
-                formData.append('csrfmiddlewaretoken', csrfToken);
-
-                fetch('', {
-                    method: 'POST',
-                    body: formData,
-                    headers: {
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        nodes.add({
-                            id: parseInt(data.node_id),
-                            label: data.name,
-                            shape: 'box',
-                            color: '#6c757d',
-                            x: parseFloat(data.x_pos),
-                            y: parseFloat(data.y_pos)
+            // delete a node
+            network.on('doubleClick', function(params) {
+                console.log('doubleClick event triggered:', params);
+                
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    console.log('Attempting to delete node:', nodeId);
+                    
+                    // Don't allow deletion of central node
+                    const centralNodeId = null;
+                    if (central_node){
+                        centralNodeId = central_node.id;
+                    }
+                    if (nodeId == centralNodeId) {
+                        console.log('Cannot delete central node');
+                        alert('The central node cannot be deleted.');
+                        return;
+                    }
+                    
+                    if (confirm('Are you sure you want to delete this node?')) {
+                        console.log('Deletion confirmed for node:', nodeId);
+                        
+                        const formData = new FormData();
+                        formData.append('action', 'delete_concept');  // Match the view's action name
+                        formData.append('concept_id', nodeId);       // Match the parameter name
+                        formData.append('csrfmiddlewaretoken', csrfToken);
+                        
+                        console.log('Sending delete request for node:', nodeId);
+                        
+                        fetch('', {
+                            method: 'POST',
+                            body: formData,
+                            headers: {
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        })
+                        .then(response => {
+                            console.log('Delete node response status:', response.status);
+                            return response.json();
+                        })
+                        .then(data => {
+                            console.log('Delete node response data:', data);
+                            if (data.status === 'success') {
+                                // Remove the node from the visualization
+                                nodes.remove(nodeId);
+                                console.log('Node successfully deleted from visualization:', nodeId);
+                                
+                                // Also remove any connected edges
+                                const connectedEdges = network.getConnectedEdges(nodeId);
+                                edges.remove(connectedEdges);
+                                console.log('Removed connected edges:', connectedEdges);
+                            } else {
+                                console.error('Failed to delete node:', data.message);
+                                alert('Failed to delete node: ' + data.message);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error in delete node request:', error);
+                            alert('Error deleting node: ' + error);
                         });
                     } else {
-                        console.error('Failed to add node:', data.message);
+                        console.log('Node deletion cancelled by user');
                     }
-                })
-                .catch(error => console.error('Error:', error));
-
-                //addConceptBottomForm.reset();
+                }
             });
 
             // save positions on drag end
@@ -294,9 +371,10 @@
                 console.log('selectNode event triggered:', params);
                 if (params.nodes.length > 0) {
                     let nodeId = params.nodes[0];
-                    let centralNodeId = {{ central_node.id }};
+                    let centralNodeId = {{ central_node.id|default:'null' }};
                     console.log('Selected node:', nodeId, 'Central node:', centralNodeId, 'SelectedNode:', selectedNode);
-
+                    // const addRelationForm = document.getElementById('add-relation-form');
+                    // const formData = new FormData(addRelationForm);  // Previously fixed, likely not line 370
                     if (selectedNode === null) {
                         // First node selected
                         if (nodeId !== centralNodeId) {
@@ -366,7 +444,63 @@
                     console.log('Node deselected:', selectedNode);
                 }
             });
+
+            // delete central node + prompt user to make a new one
+            const deleteCentralNodeButton = document.getElementById('delete-central-node');
+            if (deleteCentralNodeButton) {
+                console.log('Delete central node button found');
+                
+                deleteCentralNodeButton.addEventListener('click', function() {
+                    console.log('Delete central node button clicked');
+                    
+                    if (confirm('Are you sure you want to delete the central node? This will reset the concept map.')) {
+                        console.log('Deletion confirmed');
+                        
+                        const formData = new FormData(document.getElementById('delete-central-node-form'));
+                        
+                        fetch('', {
+                            method: 'POST',
+                            body: formData,
+                            headers: {
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        })
+                        .then(response => {
+                            console.log('Server response status:', response.status);
+                            return response.json();
+                        })
+                        .then(data => {
+                            console.log('Server response data:', data);
+                            if (data.status === 'success') {
+                                console.log('Central node deleted successfully');
+                                
+                                // Clear the existing visualization immediately
+                                nodes.clear();
+                                edges.clear();
+                                
+                                // Clear the central node badge in the instructions
+                                const centralNodeBadge = document.querySelector('.badge.bg-success');
+                                if (centralNodeBadge) {
+                                    centralNodeBadge.textContent = 'None';
+                                }
+                            } else {
+                                console.error('Failed to delete central node:', data.message);
+                                alert('Failed to delete central node: ' + data.message);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            alert('An error occurred while deleting the central node.');
+                        });
+                    } else {
+                        console.log('Deletion cancelled');
+                    }
+                });
+            } else {
+                console.log('No node to delete');
+            }
         });
+        
     </script>
 </body>
 </html>
